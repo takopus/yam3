@@ -23,6 +23,7 @@ let
     GEM_STATE_SELECTED = "selected"
     GEM_STATE_SWAPPING = "swapping"
     GEM_STATE_DYING = "dying"
+    GEM_STATE_DEAD = "dead"
     GEM_STATE_FALLING = "falling"
 
     OVER_SCALE = 1.3
@@ -33,8 +34,8 @@ let
     OVER_STEPS = 5.0
     OUT_STEPS = 20.0
     SELECTED_STEPS = 60.0
-    SWAP_STEPS = 60.0
-    DIE_STEPS = 60.0
+    SWAP_STEPS = 20.0
+    DIE_STEPS = 20.0
 
     STATE_INTERACTIVE = "interactive"
     STATE_SWAPPING = "swapping"
@@ -113,8 +114,22 @@ def ease_in_quad(var b, e, steps, s: float): float
     x = x * x
     return b + (e - b) * x
 
+def ease_linear(var b, e, steps, s: float): float
+    var x = s / steps
+    return b + (e - b) * x
+
+
+let c1 = 1.70158
+let c3 = c1 + 1.0
+def ease_in_back(var b, e, steps, s: float): float
+    var x = s / steps
+    x = c3 * x * x * x - c1 * x * x
+    return b + (e - b) * x
+
+
 def log_msg(msg)
     emplace(log_msgs, "{length(log_msgs)}: {msg}", 0)
+
 
 def init_images()
     var img: ImageHandle
@@ -127,12 +142,12 @@ def init_images()
 
 
 def write_gem(gem: Gem)
-    if (gem.state == GEM_STATE_NULL)
+    if gem.state == GEM_STATE_NULL
         log_gem(gem)
         log_msg("Error: writing NULL-gem:")
         return
 
-    if (gem.id == "")
+    if gem.id == ""
         log_gem(gem)
         log_msg("Error: writing unintialized gem:")
         return
@@ -172,31 +187,52 @@ def swap_cells(f: array<array<int>>; cx, cy, dx, dy : int)
     return <- f_clone
 
 
-def check_hit(var f: array<array<int>>; var cx, cy: int) : int
-    var c = f[cy][cx]
-    var hits = 0
-    var streak = 0
-    var from_c = max(0, cx-2)
-    var to_c = min(cx+3, FIELD_SIZE.x)
-    for tx in range(from_c, to_c)
-        if (f[cy][tx] == c)
-            streak++
-        elif (streak<3)
-            streak = 0
+def add_if_new(var arr1, arr2:array<int2>)
+    var res := arr1
+    for val in arr2
+        if find_index(arr1, val) == -1
+            push(res, val)
+    return <- res
 
-    hits += streak >= 3 ? 1 : 0
 
-    from_c = max(0, cy-2)
-    to_c = min(cy+3, FIELD_SIZE.y)
-    streak = 0
-    for ty in range(from_c, to_c)
-        if (f[ty][cx] == c)
-            streak++
-        elif (streak<3)
-            streak = 0
+def get_matched(f: array<array<int>>) : array<int2>
+    var res: array<int2>
+    var color: int
+    var streak: array<int2>
 
-    hits += streak >= 3 ? 1 : 0
-    return hits
+    for cx in range(0, FIELD_SIZE.x)
+        clear(streak)
+        color = f[0][cx]
+        push(streak, int2(cx,0))
+        for cy in range(1, FIELD_SIZE.y)
+            if f[cy][cx] == color
+                push(streak, int2(cx, cy))
+            else
+                if length(streak) >= 3
+                    res <- add_if_new(res, streak)
+                color = f[cy][cx]
+                clear(streak)
+                push(streak, int2(cx, cy))
+        if length(streak) >= 3
+            res <- add_if_new(res, streak)
+
+    for cy in range(0, FIELD_SIZE.y)
+        clear(streak)
+        color = f[cy][0]
+        push(streak, int2(0, cy))
+        for cx in range(1, FIELD_SIZE.x)
+            if f[cy][cx] == color
+                push(streak, int2(cx, cy))
+            else
+                if length(streak) >= 3
+                    res <- add_if_new(res, streak)
+                color = f[cy][cx]
+                clear(streak)
+                push(streak, int2(cx, cy))
+        if length(streak) >= 3
+            res <- add_if_new(res, streak)
+
+    return <- res
 
 
 def get_moves_count(var f: array<array<int>>) : int
@@ -206,12 +242,12 @@ def get_moves_count(var f: array<array<int>>) : int
         for cx in range(0, FIELD_SIZE.x)
             if (cx != FIELD_SIZE.x - 1)
                 moved_f <- swap_cells(f, cx, cy, 1, 0)
-                moves += check_hit(moved_f, cx, cy)
-                moves += check_hit(moved_f, cx + 1, cy)
+                if length(get_matched(moved_f)) > 0
+                    moves++
             if (cy != FIELD_SIZE.y - 1)
                 moved_f <- swap_cells(f, cx, cy, 0, 1)
-                moves += check_hit(moved_f, cx, cy)
-                moves += check_hit(moved_f, cx, cy + 1)
+                if length(get_matched(moved_f)) > 0
+                    moves++
     return moves
 
 
@@ -252,10 +288,20 @@ def update_coords(gem)
     field_gems[gem.id].coords = float2(x, y)
 
 
+def mark_dying_gems()
+    var matched <- get_matched(field)
+    for gem_pos in matched
+        var gem = field_gems["{gem_pos.x}-{gem_pos.y}"]
+        gem.state = GEM_STATE_DYING
+        gem.step = 0.0
+        write_gem(gem)
+
+
 def update_field()
     clear(render_bottom)
     clear(render_middle)
-    clear(render_top)   
+    clear(render_top)
+    var next_state: string
     var gems_to_write: array<Gem>
     for key, gem in keys(field_gems), values(field_gems)
 
@@ -280,7 +326,7 @@ def update_field()
             push(render_top, gem)
             continue
 
-        if gem.state == GEM_STATE_SELECTED         
+        if gem.state == GEM_STATE_SELECTED
             gem.step++
             gem.scale = (gem.step < SELECTED_STEPS / 2.0
                 ? ease_in_out_quad(1.0, SELECTED_SCALE, SELECTED_STEPS / 2.0, gem.step)
@@ -302,15 +348,15 @@ def update_field()
             if gem.swap_is_top
                 push(render_top, gem)
                 gem.scale = (gem.step < SWAP_STEPS / 2.0
-                    ? ease_in_quad(SELECTED_SCALE, OVER_SCALE, SWAP_STEPS / 2.0, gem.step - SWAP_STEPS / 2.0)
-                    : OVER_SCALE)
+                    ? ease_in_quad(SELECTED_SCALE, OVER_SCALE, SWAP_STEPS / 2.0, gem.step)
+                    : ease_out_quad(OVER_SCALE, 1.0, SWAP_STEPS / 2.0, gem.step - SWAP_STEPS / 2.0))
 
             else
                 push(render_middle, gem)
                 gem.scale = (gem.step < SWAP_STEPS / 2.0
                     ? ease_out_quad(OVER_SCALE, UNDER_SCALE, SWAP_STEPS / 2.0, gem.step)
                     : ease_in_quad(UNDER_SCALE, 1.0, SWAP_STEPS / 2.0, gem.step - SWAP_STEPS / 2.0))
-            
+
             update_coords(gem)
             if gem.step >= SWAP_STEPS
                 gem.state = GEM_STATE_STATIC
@@ -319,22 +365,40 @@ def update_field()
                 dbg_stat1 = "{gem.color} to {gem.swap_to_id}"
                 gem.id = gem.swap_to_id
                 push(gems_to_write, gem)
+                next_state = STATE_DYING
             continue
+
+        if gem.state == GEM_STATE_DYING
+            gem.step++
+            gem.scale = ease_in_back(1.0, DIE_SCALE, DIE_STEPS, gem.step)
+            update_coords(gem)
+            push(render_bottom, gem)
+            if gem.step >= DIE_STEPS
+                gem.state = GEM_STATE_DEAD
+                gem.color = -1
+                push(gems_to_write, gem)
+                next_state = STATE_FALLING
 
     if length(gems_to_write)==0
         return
 
     for fix_gem in gems_to_write
         write_gem(fix_gem)
-    
-    field_state = STATE_INTERACTIVE
+
+    if next_state == STATE_DYING
+        mark_dying_gems()
+
+    if next_state == STATE_FALLING
+        next_state = STATE_FALLING
+
+    field_state = next_state
 
 
 def draw_gem(gem: Gem; set_idx, gem_idx: int)
+    if gem.state == GEM_STATE_DEAD
+        return
     var size = float2(gem.scale * IMG_SIZE.x, gem.scale * IMG_SIZE.y)
     draw_image(gem_images[gem.color], gem.coords.x, gem.coords.y, make_color(1.0), size)
-    //text_out(gem.coords.x + 20.0, gem.coords.y + 20.0, "{gem.id}", 0xFFFFFFFF)
-    //text_out(gem.coords.x + 20.0, gem.coords.y + 40.0, "{set_idx}:{gem_idx}", 0xFFFFFFFF)
 
 
 def draw_field()
@@ -374,7 +438,8 @@ def draw_stats()
     text_out(50, 582, "Moves count: {moves}", 0xF0F0F0)
     text_out(50, 602, "Over gem: {over_gem_str}", 0xF0F0F0)
     text_out(50, 622, "Selected gem: {selected_gem_str}", 0xF0F0F0)
-    text_out(50, 642, "dbg_stat1: {dbg_stat1}", 0xF0F0F0)
+    text_out(50, 642, "Field state: {field_state}", 0xF0F0F0)
+    text_out(50, 662, "dbg_stat1: {dbg_stat1}", 0xF0F0F0)
 
 
 def log_gem(gem: Gem; var pref: string = "")
@@ -416,7 +481,7 @@ def set_over_gem(var gem: Gem)
 def check_swappable(gem1, gem2: Gem)
     if gem1.state == GEM_STATE_NULL || gem2.state == GEM_STATE_NULL
         return false
-    
+
     var pos1 = int2(gem1.pos.x, gem1.pos.y)
     var pos2 = int2(gem2.pos.x, gem2.pos.y)
     var dx = pos2.x - pos1.x
@@ -425,11 +490,9 @@ def check_swappable(gem1, gem2: Gem)
     if !((abs(dx) == 1 && abs(dy) == 0) || (abs(dy) == 1 && abs(dx) == 0))
         return false
 
-    var moves_avail = 0
     var moved_f <- swap_cells(field, pos1.x, pos1.y, dx, dy)
-    moves_avail += check_hit(moved_f, pos1.x, pos1.y)
-    moves_avail += check_hit(moved_f, pos2.x, pos2.y)
-    return moves_avail > 0
+    var moves_avail:bool = length(get_matched(moved_f)) > 0
+    return moves_avail
 
 
 def swap_gems(gemA, gemB: Gem)
@@ -452,6 +515,9 @@ def swap_gems(gemA, gemB: Gem)
     gem2.step = 0.0
     gem2.state = GEM_STATE_SWAPPING
     write_gem(gem2)
+
+    selected_gem = Gem()
+    over_gem = Gem()
 
     field_state = STATE_SWAPPING
 
