@@ -62,6 +62,7 @@ struct Gem
     swap_is_top: bool
     swap_from: float2
     swap_to: float2
+    swap_to_id: string
 
     // falling:
     fall_delay: int
@@ -123,6 +124,21 @@ def init_images()
         make_image_color_transparent(img, get_pixel(img, 0, 0))
         set_image_smooth(img, true)
         push(gem_images, img)
+
+
+def write_gem(gem: Gem)
+    if (gem.state == GEM_STATE_NULL)
+        log_gem(gem)
+        log_msg("Error: writing NULL-gem:")
+        return
+
+    if (gem.id == "")
+        log_gem(gem)
+        log_msg("Error: writing unintialized gem:")
+        return
+
+    field_gems[gem.id] = gem
+    field[int(gem.pos.y)][int(gem.pos.x)] = gem.color
 
 
 def gen_field() : array<array<int>>
@@ -226,7 +242,7 @@ def init_field()
             gem.color = field[cy][cx]
             gem.coords.x = FIELD_OFFSET.x + float(cx) * CELL_SIZE.x + (CELL_SIZE.x - IMG_SIZE.x) / 2.0
             gem.coords.y = FIELD_OFFSET.y + float(cy) * CELL_SIZE.y + (CELL_SIZE.y - IMG_SIZE.y) / 2.0
-            field_gems["{cx}-{cy}"] = gem
+            write_gem(gem)
 
 
 def update_coords(gem)
@@ -240,6 +256,7 @@ def update_field()
     clear(render_bottom)
     clear(render_middle)
     clear(render_top)   
+    var gems_to_write: array<Gem>
     for key, gem in keys(field_gems), values(field_gems)
 
         if gem.state == GEM_STATE_NULL
@@ -295,7 +312,22 @@ def update_field()
                     : ease_in_quad(UNDER_SCALE, 1.0, SWAP_STEPS / 2.0, gem.step - SWAP_STEPS / 2.0))
             
             update_coords(gem)
+            if gem.step >= SWAP_STEPS
+                gem.state = GEM_STATE_STATIC
+                gem.step = 0.0
+                gem.pos = gem.swap_to
+                dbg_stat1 = "{gem.color} to {gem.swap_to_id}"
+                gem.id = gem.swap_to_id
+                push(gems_to_write, gem)
             continue
+
+    if length(gems_to_write)==0
+        return
+
+    for fix_gem in gems_to_write
+        write_gem(fix_gem)
+    
+    field_state = STATE_INTERACTIVE
 
 
 def draw_gem(gem: Gem; set_idx, gem_idx: int)
@@ -317,12 +349,14 @@ def draw_field()
 
     disable_alpha_blend()
 
+
 def draw_log()
     var y: int
     var lines = min(length(log_msgs), 25)
     for idx in range(0, lines)
         y = 50 + 20 * idx
         text_out(600, y, log_msgs[idx], 0xF0F0F0)
+
 
 def to_string_gem(gem: Gem)
     if gem.state == GEM_STATE_NULL || gem.state == ""
@@ -332,6 +366,7 @@ def to_string_gem(gem: Gem)
     var step = int(gem.step)
     return "state: {gem.state}, pos: {px}:{py}, color: {FILE_NAMES[gem.color]}, step: {step}"
 
+
 def draw_stats()
     var moves = get_moves_count(field)
     var over_gem_str = to_string_gem(field_gems[over_gem.id])
@@ -340,6 +375,7 @@ def draw_stats()
     text_out(50, 602, "Over gem: {over_gem_str}", 0xF0F0F0)
     text_out(50, 622, "Selected gem: {selected_gem_str}", 0xF0F0F0)
     text_out(50, 642, "dbg_stat1: {dbg_stat1}", 0xF0F0F0)
+
 
 def log_gem(gem: Gem; var pref: string = "")
     pref = pref != "" ? "{pref} -" : pref
@@ -357,13 +393,14 @@ def initialize
     field_state = STATE_INTERACTIVE
     return
 
+
 def set_over_gem(var gem: Gem)
     // if previous is not null, fade it:
     if (over_gem.state != GEM_STATE_NULL)
         over_gem.state = GEM_STATE_STATIC
         over_gem.prev_state = GEM_STATE_OVER
         over_gem.step = OUT_STEPS
-        field_gems[over_gem.id] = over_gem
+        write_gem(over_gem)
 
     over_gem = gem
     // if it's not selected:
@@ -372,12 +409,61 @@ def set_over_gem(var gem: Gem)
         over_gem.step = 0.0
         if over_gem.id == ""
             dbg_stat1 = "new over, {over_gem.pos.x}"
-        field_gems[over_gem.id] = over_gem
+        write_gem(over_gem)
         log_gem(over_gem)
+
+
+def check_swappable(gem1, gem2: Gem)
+    if gem1.state == GEM_STATE_NULL || gem2.state == GEM_STATE_NULL
+        return false
+    
+    var pos1 = int2(gem1.pos.x, gem1.pos.y)
+    var pos2 = int2(gem2.pos.x, gem2.pos.y)
+    var dx = pos2.x - pos1.x
+    var dy = pos2.y - pos1.y
+
+    if !((abs(dx) == 1 && abs(dy) == 0) || (abs(dy) == 1 && abs(dx) == 0))
+        return false
+
+    var moves_avail = 0
+    var moved_f <- swap_cells(field, pos1.x, pos1.y, dx, dy)
+    moves_avail += check_hit(moved_f, pos1.x, pos1.y)
+    moves_avail += check_hit(moved_f, pos2.x, pos2.y)
+    return moves_avail > 0
+
+
+def swap_gems(gemA, gemB: Gem)
+
+    var gem1 := gemA
+    var gem2 := gemB
+
+    gem1.swap_is_top = true
+    gem1.swap_from = gem1.pos
+    gem1.swap_to = gem2.pos
+    gem1.swap_to_id = gem2.id
+    gem1.step = 0.0
+    gem1.state = GEM_STATE_SWAPPING
+    write_gem(gem1)
+
+    gem2.swap_is_top = false
+    gem2.swap_from = gem2.pos
+    gem2.swap_to = gem1.pos
+    gem2.swap_to_id = gem1.id
+    gem2.step = 0.0
+    gem2.state = GEM_STATE_SWAPPING
+    write_gem(gem2)
+
+    field_state = STATE_SWAPPING
+
 
 def set_selected_gem(gem)
     // there was something selected before
     if (selected_gem.state != GEM_STATE_NULL)
+        var is_swappable = check_swappable(selected_gem, gem)
+        if is_swappable
+            swap_gems(selected_gem, gem)
+            return
+
         selected_gem.state = GEM_STATE_STATIC
         selected_gem.prev_state = GEM_STATE_SELECTED
         var cur_sel_step = field_gems[selected_gem.id].step
@@ -386,7 +472,8 @@ def set_selected_gem(gem)
             : cur_sel_step)
         if selected_gem.id == ""
             dbg_stat1 = "prev selected"
-        field_gems[selected_gem.id] = selected_gem
+        write_gem(selected_gem)
+
     // set new selected:
     over_gem = Gem()
     selected_gem = gem
@@ -394,7 +481,7 @@ def set_selected_gem(gem)
     selected_gem.step = SELECTED_STEPS / 2.0
     if selected_gem.id == ""
         dbg_stat1 = "new selected"
-    field_gems[selected_gem.id] = selected_gem
+    write_gem(selected_gem)
 
 def process_mouse()
     mouse_pos = get_mouse_position()
@@ -405,12 +492,11 @@ def process_mouse()
         : field_gems["{mouse_cell.x}-{mouse_cell.y}"])
 
     // over gem changed
-    dbg_stat1 = "{over_gem.id} - {mouse_gem.id} - {selected_gem.id}"
     if over_gem.id != mouse_gem.id && !(selected_gem.state != GEM_STATE_NULL && selected_gem.id == mouse_gem.id)
         set_over_gem(mouse_gem)
 
     // clicked on gem, which wasn't selected before
-    if get_mouse_button_up(MB_LEFT) && mouse_gem.pos.x != -1.0 && selected_gem.pos != mouse_gem.pos
+    if get_mouse_button_up(MB_LEFT) && mouse_gem.state != GEM_STATE_NULL && selected_gem.pos != mouse_gem.pos
         set_selected_gem(mouse_gem)
 
 
