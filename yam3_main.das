@@ -98,6 +98,9 @@ var
     dbg_stat1: string
     dbg_stat2: float2
 
+    test_field: array<array<int>>
+
+
 // start value, end value, steps, current step
 def ease_in_out_quad(var b, e, steps, s: float): float
     var x = s / steps
@@ -133,6 +136,31 @@ def log_msg(msg)
     emplace(log_msgs, "{length(log_msgs)}: {msg}", 0)
 
 
+def init_test_field()
+    var test_field_str = ""
+
+    test_field_str += "r r 0 r r r r r\n"
+    test_field_str += "r r 0 r r r r r\n"
+    test_field_str += "0 0 r 0 r r r r\n"
+    test_field_str += "r r r r r r r r\n"
+    test_field_str += "r r r r r r r r\n"
+    test_field_str += "r r r r r r r r\n"
+    test_field_str += "r r r r r r r r\n"
+    test_field_str += "r r r r r r r r\n"
+
+    if test_field_str == ""
+        return
+
+    var line: array<int>
+    var lines <- split(test_field_str, "\n")
+    for cy in range(0, length(lines) - 1)
+        clear(line)
+        var chars: array<string> <- split(lines[cy], " ")
+        for char in chars
+            push(line, char == "r" ? -1 : int(char))
+        push_clone(test_field, line)
+
+
 def init_images()
     var img: ImageHandle
     for i in range(0, GEM_COLORS)
@@ -164,6 +192,7 @@ def gen_field() : array<array<int>>
     var line: array<int>
     var c:int
     var hitV, hitH: bool
+    var is_testing = length(test_field) > 0
     for cy in range(0, FIELD_SIZE.y)
         clear(line)
         for cx in range(0, FIELD_SIZE.x)
@@ -171,11 +200,15 @@ def gen_field() : array<array<int>>
             while hitV || hitH
                 hitV = false
                 hitH = false
-                c = random_int(RAND_SEED) % GEM_COLORS
-                if cx > 1 && line[cx-1]==c && line[cx-2]==c
-                    hitH = true
-                if cy > 1 && f[cy-1][cx]==c && f[cy-2][cx]==c
-                    hitV = true
+                if is_testing
+                    c = test_field[cy][cx] == -1 ? (random_int(RAND_SEED) % (GEM_COLORS - 1) + 1) : test_field[cy][cx]
+                else
+                    c = random_int(RAND_SEED) % GEM_COLORS
+                if !is_testing
+                    if cx > 1 && line[cx-1]==c && line[cx-2]==c
+                        hitH = true
+                    if cy > 1 && f[cy-1][cx]==c && f[cy-2][cx]==c
+                        hitV = true
             push(line, c)
         push_clone(f, line)
     return <- f
@@ -195,10 +228,11 @@ def add_if_new(var arr1, arr2:array<int2>)
     for val in arr2
         if find_index(arr1, val) == -1
             push(res, val)
+    print("res len: {length(res)}")
     return <- res
 
 
-def get_matched(f: array<array<int>>) : array<int2>
+def get_matched(f: array<array<int>>; do_trace: bool = false) : array<int2>
     var res: array<int2>
     var color: int
     var streak: array<int2>
@@ -212,11 +246,15 @@ def get_matched(f: array<array<int>>) : array<int2>
                 push(streak, int2(cx, cy))
             else
                 if length(streak) >= 3
+                    if do_trace
+                        print(join(streak, " -- \n"))
                     res <- add_if_new(res, streak)
                 color = f[cy][cx]
                 clear(streak)
                 push(streak, int2(cx, cy))
         if length(streak) >= 3
+            if do_trace
+                print(join(streak, " -- \n"))
             res <- add_if_new(res, streak)
 
     for cy in range(0, FIELD_SIZE.y)
@@ -228,13 +266,19 @@ def get_matched(f: array<array<int>>) : array<int2>
                 push(streak, int2(cx, cy))
             else
                 if length(streak) >= 3
+                    if do_trace
+                        print(join(streak, " -- \n"))
                     res <- add_if_new(res, streak)
                 color = f[cy][cx]
                 clear(streak)
                 push(streak, int2(cx, cy))
         if length(streak) >= 3
+            if do_trace
+                print(join(streak, " -- \n"))
             res <- add_if_new(res, streak)
 
+    if do_trace
+        print(join(res, " -- \n"))
     return <- res
 
 
@@ -294,7 +338,7 @@ def update_coords(gem)
 
 
 def mark_dying_gems()
-    var matched <- get_matched(field)
+    var matched <- get_matched(field, true)
     for gem_pos in matched
         var gem = field_gems["{gem_pos.x}-{gem_pos.y}"]
         gem.state = GEM_STATE_DYING
@@ -422,7 +466,8 @@ def update_field()
                 push(render_bottom, gem)
                 gem.step--
                 continue
-            
+
+
             gem.fall_speed *= 1.1
             gem.fall_offset += gem.fall_speed
             update_coords(gem)
@@ -493,10 +538,10 @@ def to_string_gem(gem: Gem)
 
 
 def draw_stats()
-    var moves = get_moves_count(field)
+    //var moves = get_moves_count(field)
     var over_gem_str = to_string_gem(field_gems[over_gem.id])
     var selected_gem_str = to_string_gem(field_gems[selected_gem.id])
-    text_out(50, 582, "Moves count: {moves}", 0xF0F0F0)
+    //text_out(50, 582, "Moves count: {moves}", 0xF0F0F0)
     text_out(50, 602, "Over gem: {over_gem_str}", 0xF0F0F0)
     text_out(50, 622, "Selected gem: {selected_gem_str}", 0xF0F0F0)
     text_out(50, 642, "Field state: {field_state}", 0xF0F0F0)
@@ -515,6 +560,7 @@ def initialize
     set_window_title("Yet Another Match-3")
     randomize_seed(RAND_SEED)
     init_images()
+    init_test_field()
     init_field()
     field_state = STATE_INTERACTIVE
     return
