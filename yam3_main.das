@@ -467,6 +467,7 @@ def update_field()
                 gem.step--
                 continue
 
+
             gem.fall_speed *= 1.1
             gem.fall_offset += gem.fall_speed
             update_coords(gem)
