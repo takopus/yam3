@@ -29,13 +29,14 @@ let
     OVER_SCALE = 1.3
     SELECTED_SCALE = 1.3
     UNDER_SCALE = 0.7
-    DIE_SCALE = 0.1
+    DIE_SCALE = 0.3
 
     OVER_STEPS = 5.0
     OUT_STEPS = 20.0
     SELECTED_STEPS = 60.0
     SWAP_STEPS = 20.0
     DIE_STEPS = 20.0
+    FALL_DELAY = 3.0
 
     STATE_INTERACTIVE = "interactive"
     STATE_SWAPPING = "swapping"
@@ -52,6 +53,7 @@ struct Gem
     coords: float2
     scale: float = 1.0
     size: float2
+    brightness: float = 1.0
 
     // common to over, blink, swap and die
     step: float
@@ -66,10 +68,10 @@ struct Gem
     swap_to_id: string
 
     // falling:
-    fall_delay: int
     fall_speed: float
-    fall_coords: float2
+    fall_offset: float
     fall_target: float
+    fall_to_y: float
 
 var
     RAND_SEED: int4
@@ -142,6 +144,7 @@ def init_images()
 
 
 def write_gem(gem: Gem)
+    log_msg("Writing gem {gem.id}")
     if gem.state == GEM_STATE_NULL
         log_gem(gem)
         log_msg("Error: writing NULL-gem:")
@@ -285,6 +288,8 @@ def update_coords(gem)
     var size = float2(gem.scale * IMG_SIZE.x, gem.scale * IMG_SIZE.y)
     var x = FIELD_OFFSET.x + gem.pos.x * CELL_SIZE.x + (CELL_SIZE.x - size.x) / 2.0
     var y = FIELD_OFFSET.y + gem.pos.y * CELL_SIZE.y + (CELL_SIZE.y - size.y) / 2.0
+    if gem.state == GEM_STATE_FALLING
+        y += gem.fall_offset
     field_gems[gem.id].coords = float2(x, y)
 
 
@@ -297,12 +302,36 @@ def mark_dying_gems()
         write_gem(gem)
 
 
+def mark_falling_gems()
+    var holes_below: int
+    var gems_below: int
+    for cx in range(0, FIELD_SIZE.x)
+        holes_below = 0
+        gems_below = 0
+        for rcy in range(0, FIELD_SIZE.y)
+            var cy = FIELD_SIZE.y - 1 - rcy
+            if field[cy][cx] == -1
+                holes_below++
+                continue
+            var key = "{cx}-{cy}"
+            if holes_below > 0
+                field_gems[key].state = GEM_STATE_FALLING
+                field_gems[key].step = field[cy+1][cx] == -1 ? 0.0 : float(gems_below) * FALL_DELAY
+                //field_gems[key].brightness = 0.75
+                field_gems[key].fall_speed = 2.0
+                var target_y = cy + holes_below
+                field_gems[key].fall_target = float(target_y)
+                field_gems[key].fall_to_y = field_gems["{cx}-{target_y}"].coords.y
+            gems_below++
+
+
 def update_field()
     clear(render_bottom)
     clear(render_middle)
     clear(render_top)
     var next_state: string
     var gems_to_write: array<Gem>
+    var falling_gems_cnt: int
     for key, gem in keys(field_gems), values(field_gems)
 
         if gem.state == GEM_STATE_NULL
@@ -371,6 +400,7 @@ def update_field()
         if gem.state == GEM_STATE_DYING
             gem.step++
             gem.scale = ease_in_back(1.0, DIE_SCALE, DIE_STEPS, gem.step)
+            gem.brightness = ease_linear(1.0, 0.0, DIE_STEPS, gem.step)
             update_coords(gem)
             push(render_bottom, gem)
             if gem.step >= DIE_STEPS
@@ -378,6 +408,36 @@ def update_field()
                 gem.color = -1
                 push(gems_to_write, gem)
                 next_state = STATE_FALLING
+            continue
+
+
+    // falling:
+    // fall_speed: float
+    // fall_offset: float
+    // fall_target: float
+
+        if gem.state == GEM_STATE_FALLING
+            falling_gems_cnt++
+            if gem.step > 0.0
+                push(render_bottom, gem)
+                gem.step--
+                continue
+            
+            gem.fall_speed *= 1.1
+            gem.fall_offset += gem.fall_speed
+            update_coords(gem)
+            if gem.coords.y >= gem.fall_to_y
+                gem.state = GEM_STATE_STATIC
+                gem.pos.y = gem.fall_target
+                gem.id = "{int(gem.pos.x)}-{int(gem.pos.y)}"
+                gem.step = 1.0
+                update_coords(gem)
+                push(gems_to_write, gem)
+                falling_gems_cnt--
+            push(render_bottom, gem)
+            continue
+
+
 
     if length(gems_to_write)==0
         return
@@ -389,7 +449,8 @@ def update_field()
         mark_dying_gems()
 
     if next_state == STATE_FALLING
-        next_state = STATE_FALLING
+        mark_falling_gems()
+        field_state = "lock"
 
     field_state = next_state
 
@@ -398,7 +459,7 @@ def draw_gem(gem: Gem; set_idx, gem_idx: int)
     if gem.state == GEM_STATE_DEAD
         return
     var size = float2(gem.scale * IMG_SIZE.x, gem.scale * IMG_SIZE.y)
-    draw_image(gem_images[gem.color], gem.coords.x, gem.coords.y, make_color(1.0), size)
+    draw_image(gem_images[gem.color], gem.coords.x, gem.coords.y, make_color(gem.brightness), size)
 
 
 def draw_field()
